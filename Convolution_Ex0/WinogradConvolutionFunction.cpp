@@ -11,7 +11,7 @@ using namespace std;
 using namespace chrono;
 
 /***************************************************************************
-	winograd Convolution 
+	comparing winograd and naive Convolution 
 *****************************************************************************/
 
 void filterTransform(vector<float>& Output_U, vector<float> filter, int output_c, int input_c) {
@@ -69,6 +69,167 @@ void filterTransform(vector<float>& Output_U, vector<float> filter, int output_c
 	}
 }
 
+void zeroPadding(vector<float> &zeroPaddingOutput, vector<float> &zeroPaddingInput, int input_n, int input_c, int input_h, int input_w, int pad_l, int pad_r, int pad_t, int pad_b) {
+
+	int temp1 = input_w * input_h * input_c;
+	int temp1o = (input_h + pad_t + pad_b)*(input_w + pad_l + pad_r)* input_c;
+	for (int ⁠n_idx = 0; ⁠n_idx < input_n; ⁠n_idx++)
+	{
+		int temp2 = ⁠n_idx * temp1;
+		int temp2o = ⁠n_idx * temp1o;
+		for (int ⁠c_idx = 0; ⁠c_idx < input_c; ⁠c_idx++)
+		{
+			int temp3 = ⁠c_idx * input_w * input_h + temp2;
+			int temp3o = ⁠c_idx * (input_w + pad_l + pad_r) * (input_h + pad_t + pad_b) + temp2o;
+			for (int ⁠h_idx = 0; ⁠h_idx < input_h; ⁠h_idx++)
+			{
+				int temp4 = ⁠h_idx * input_w + temp3;
+				int temp4o = (⁠h_idx + pad_t)*(input_w + pad_l + pad_r) + pad_l + temp3o;
+
+				for (int w_idx = 0; w_idx < input_w; w_idx++)
+				{
+					int ⁠g_idx = w_idx + temp4;
+					int g_idx_Output = w_idx + temp4o;
+					zeroPaddingOutput[g_idx_Output] = zeroPaddingInput[⁠g_idx];
+				}
+			}
+		}
+	}
+}
+
+void winogradConv2d(vector<float> &convOutput, vector<float> &convInput, vector<float> kernel, int input_n, int input_c, int input_h, int input_w, int output_c) {
+	printf("===== Winograd Convolution ===== \n");
+
+	// 1. filterTransform 수행
+	vector<float> U(output_c * input_c * 16);
+	filterTransform(U, kernel, output_c, input_c);
+
+	// 2. input transform 및 element wise multiplication, output transform수행
+	int output_h_z = input_h - 2;
+	int output_w_z = input_w - 2;
+
+	int temp_o = output_c * output_h_z * output_w_z;
+	int temp_i = input_c * input_h * input_w;
+	int temp_u = input_c * 16;
+
+	// 3. Element wise matrix multiplication
+	for (int n = 0; n < input_n; n++){
+		int temp_i2 = n * temp_i;
+		int temp_o2 = n * temp_o;
+
+		for (int row = 0; row < output_h_z; row += 2){
+			int row_idx1 = row * input_w;
+			int row_idx2 = row_idx1 + input_w;
+			int row_idx3 = row_idx2 + input_w;
+			int row_idx4 = row_idx3 + input_w;
+			int row_idxo1 = row * output_w_z;
+			int row_idxo2 = row_idxo1 + output_w_z;
+
+			for (int col = 0; col < output_w_z; col += 2){
+
+				for (int outch = 0; outch < output_c; outch++){
+					int temp_u2 = outch * temp_u;
+					int ot_idx1 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo1;
+					int ot_idx3 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo2;
+					float y1 = 0, y2 = 0, y3 = 0,y4 = 0;
+
+					for (int inch = 0; inch < input_c; inch++){
+						int temp_ic = inch * input_h * input_w;
+						int u_idx = inch * 16 + temp_u2; // U idex
+
+						int t_idx1 = temp_ic + temp_i2 + row_idx1 + col;
+						int t_idx2 = temp_ic + temp_i2 + row_idx2 + col;
+						int t_idx3 = temp_ic + temp_i2 + row_idx3 + col;
+						int t_idx4 = temp_ic + temp_i2 + row_idx4 + col;
+
+						float* d1 = &convInput[t_idx1];
+						float* d2 = &convInput[t_idx1 + 1];
+						float* d3 = &convInput[t_idx1 + 2];
+						float* d4 = &convInput[t_idx1 + 3];
+
+						float* d5 = &convInput[t_idx2];
+						float* d6 = &convInput[t_idx2 + 1];
+						float* d7 = &convInput[t_idx2 + 2];
+						float* d8 = &convInput[t_idx2 + 3];
+
+						float* d9 = &convInput[t_idx3];
+						float* d10 = &convInput[t_idx3 + 1];
+						float* d11 = &convInput[t_idx3 + 2];
+						float* d12 = &convInput[t_idx3 + 3];
+
+						float* d13 = &convInput[t_idx4];
+						float* d14 = &convInput[t_idx4 + 1];
+						float* d15 = &convInput[t_idx4 + 2];
+						float* d16 = &convInput[t_idx4 + 3];
+
+						float dd1 = *d11 - (*d3);
+						float dd2 = *d2 - (*d10);
+						float dd3 = *d7 + (*d11);
+						float dd4 = *d6 + (*d10);
+						float dd5 = *d7 - (*d11);
+						float dd6 = *d10 - (*d6);
+						float dd7 = *d15 - (*d7);
+						float dd8 = *d6 - (*d14);
+
+						float v1 = *d1 - *d9 + dd1;
+						float v2 = dd2 - dd1;//
+						float v3 = -dd1 - dd2;//
+						float v4 = dd2 - *d4 + *d12;
+
+						float v5 = *d5 + *d9 - dd3;
+						float v6 = dd4 + dd3;
+						float v7 = dd3 - dd4;
+						float v8 = dd4 - *d8 - *d12;
+
+						float v9 = *d9 - *d5 + dd5;
+						float v10 = dd6 - dd5;
+						float v11 = -(dd6 + dd5);
+						float v12 = dd6 + *d8 - *d12;
+
+						float v13 = *d5 - *d13 + dd7;
+						float v14 = dd8 - dd7;
+						float v15 = -dd7 - dd8;
+						float v16 = dd8 - *d8 + *d16;
+
+						// U . V
+						float m1 = v1 * U[u_idx];
+						float m2 = v2 * U[u_idx + 1];
+						float m3 = v3 * U[u_idx + 2];
+						float m4 = v4 * U[u_idx + 3];
+						float m5 = v5 * U[u_idx + 4];
+						float m6 = v6 * U[u_idx + 5];
+						float m7 = v7 * U[u_idx + 6];
+						float m8 = v8 * U[u_idx + 7];
+						float m9 = v9 * U[u_idx + 8];
+						float m10 = v10 * U[u_idx + 9];
+						float m11 = v11 * U[u_idx + 10];
+						float m12 = v12 * U[u_idx + 11];
+						float m13 = v13 * U[u_idx + 12];
+						float m14 = v14 * U[u_idx + 13];
+						float m15 = v15 * U[u_idx + 14];
+						float m16 = v16 * U[u_idx + 15];
+
+						// 4. output transfom
+						float sub_y1 = m2 + m6 + m10;
+						float sub_y2 = m3 + m7 + m11;
+						float sub_y3 = m6 - m10 - m14;
+						float sub_y4 = m7 - m11 - m15;
+
+						y1 += m1 + m5 + m9 + sub_y1 + sub_y2;
+						y2 += sub_y1 - sub_y2 - m4 - m8 - m12;
+						y3 += m5 - m9 - m13 + sub_y3 + sub_y4;
+						y4 += sub_y3 - sub_y4 - m8 + m12 + m16;
+					}
+					convOutput[ot_idx1] = y1;
+					convOutput[ot_idx1 + 1] = y2;
+					convOutput[ot_idx3] = y3;
+					convOutput[ot_idx3 + 1] = y4;
+				}
+			}
+		}
+	}
+}
+
 void valueCheck(vector<float>& valueCheckInput, int input_n, int input_c, int input_h, int input_w, int offset = 0) {
 	if (offset == 1) { input_n = 1; }
 
@@ -92,42 +253,48 @@ void valueCheck(vector<float>& valueCheckInput, int input_n, int input_c, int in
 	}cout << endl;
 }
 
-void convolution(vector<float> &convOutput, vector<float> &convInput, vector<float> &kernel, int kernelSize, int stride, int input_n, int input_c, int input_h, int input_w, int ouput_c) {
-	int outputHeightSize = ((input_h - kernelSize) / stride) + 1;
-	int outputWidthSize = ((input_w - kernelSize) / stride) + 1;
-	//Conv_output.resize(input_n * Ouput_C * outputHeightSize * outputHeightSize);
-	//cout << "===== Convolution ===== \n";
+void convolution(float* output, float* input, float* weight, int IN, int IC, int IH, int IW, int OC, int KH, int KW, int SH, int SW) {
+	printf("===== Conventional Convolution ===== \n");
 
-	int temp1i = input_h * input_w *input_c;
-	int temp1o = outputHeightSize * outputWidthSize * ouput_c;
-	int temp1k = kernelSize * kernelSize * input_c;
-	for (int ⁠n_idx = 0; ⁠n_idx < input_n; ⁠n_idx++)
-	{
-		int temp2i = ⁠n_idx * temp1i;
-		int temp2o = ⁠n_idx * temp1o;
-		for (int k_idx = 0; k_idx < ouput_c; k_idx++)
-		{
-			int temp2k = k_idx * temp1k;
-			int temp3o = k_idx * outputHeightSize * outputWidthSize + temp2o;
-			for (int ⁠c_idx = 0; ⁠c_idx < input_c; ⁠c_idx++)
-			{
-				int temp3i = ⁠c_idx * input_w * input_h + temp2i;
-				int temp3k = ⁠c_idx * kernelSize * kernelSize + temp2k;
-				for (int rowStride = 0; rowStride < outputHeightSize; rowStride++) {
-					int temp4o = rowStride * outputWidthSize + temp3o;
-					for (int colStride = 0; colStride < outputWidthSize; colStride++) {
+	int OH = ((IH - KH) / SH) + 1;
+	int OW = ((IW - KW) / SW) + 1;
+
+	int C_offset_i, C_offset_o, C_offset_k, H_offset_i, H_offset_o, H_offset_k, W_offset_i, W_offset_o, W_offset_k, ⁠g_idx_i, g_idx_o, g_idx_k;
+	int N_offset_i = IC * IH * IW;
+	int N_offset_o = OC * OH * OW;
+	int N_offset_k = IC * KH * KW;
+
+	for (int ⁠n_idx = 0; ⁠n_idx < IN; ⁠n_idx++) {
+		C_offset_i = ⁠n_idx * N_offset_i;
+		C_offset_o = ⁠n_idx * N_offset_o;
+
+		for (int k_idx = 0; k_idx < OC; k_idx++) {
+			C_offset_k = k_idx * N_offset_k;
+			H_offset_o = k_idx * OH * OW + C_offset_o;
+
+			for (int ⁠c_idx = 0; ⁠c_idx < IC; ⁠c_idx++) {
+				H_offset_i = ⁠c_idx * IH * IW + C_offset_i;
+				H_offset_k = ⁠c_idx * KH * KW + C_offset_k;
+
+				for (int rowStride = 0; rowStride < OH; rowStride++) {
+					W_offset_o = rowStride * OW + H_offset_o;
+
+					for (int colStride = 0; colStride < OW; colStride++) {
 						float sum = 0;
-						int g_idx_o = colStride + temp4o;
-						for (int x = rowStride * stride; x < rowStride * stride + kernelSize; x++) {
-							int temp4i = x * input_w + temp3i;
-							int temp4k = (x - rowStride * stride) * kernelSize + temp3k;
-							for (int y = colStride * stride; y < colStride * stride + kernelSize; y++) {
-								int ⁠g_idx_i = y + temp4i;
-								int g_idx_k = (y - colStride * stride) + temp4k;
-								sum += convInput[⁠g_idx_i] * kernel[g_idx_k];
+						g_idx_o = colStride + W_offset_o;
+
+						for (int y = rowStride * SH; y < rowStride * SH + KH; y++) {
+							W_offset_i = y * IW + H_offset_i;
+							W_offset_k = (y - rowStride * SH) * KH + H_offset_k;
+
+							for (int x = colStride * SW; x < colStride * SW + KW; x++) {
+
+								⁠g_idx_i = x + W_offset_i;
+								g_idx_k = (x - colStride * SW) + W_offset_k;
+								sum += input[⁠g_idx_i] * weight[g_idx_k];
 							}
 						}
-						convOutput[g_idx_o] += sum;
+						output[g_idx_o] += sum;
 					}
 				}
 			}
@@ -135,1127 +302,131 @@ void convolution(vector<float> &convOutput, vector<float> &convInput, vector<flo
 	}
 }
 
-void zeroPadding(vector<float> &zeroPaddingOutput, vector<float> &zeroPaddingInput, int input_n, int input_c, int input_h, int input_w, int leftPadingSize, int rightPadingSize, int topPadingSize, int bottomPadingSize) {
 
-	int temp1 = input_w * input_h * input_c;
-	int temp1o = (input_h + topPadingSize + bottomPadingSize)*(input_w + leftPadingSize + rightPadingSize)* input_c;
-	for (int ⁠n_idx = 0; ⁠n_idx < input_n; ⁠n_idx++)
-	{
-		int temp2 = ⁠n_idx * temp1;
-		int temp2o = ⁠n_idx * temp1o;
-		for (int ⁠c_idx = 0; ⁠c_idx < input_c; ⁠c_idx++)
-		{
-			int temp3 = ⁠c_idx * input_w * input_h + temp2;
-			int temp3o = ⁠c_idx * (input_w + leftPadingSize + rightPadingSize) * (input_h + topPadingSize + bottomPadingSize) + temp2o;
-			for (int ⁠h_idx = 0; ⁠h_idx < input_h; ⁠h_idx++)
-			{
-				int temp4 = ⁠h_idx * input_w + temp3;
-				int temp4o = (⁠h_idx + topPadingSize)*(input_w + leftPadingSize + rightPadingSize) + leftPadingSize + temp3o;
-
-				for (int w_idx = 0; w_idx < input_w; w_idx++)
-				{
-					int ⁠g_idx = w_idx + temp4;
-					int g_idx_Output = w_idx + temp4o;
-					zeroPaddingOutput[g_idx_Output] = zeroPaddingInput[⁠g_idx];
-				}
-			}
+// 결과값 비교
+void compareResults(float *result_1, float *result_2, int size) {
+	bool result = true;
+	for (int i = 0; i < size; i++) {
+		if ((result_1[i]) != result_2[i]) {
+			printf("[%d] The results is not matched! (%f, %f)\n", i, result_1[i], result_2[i]);
+			result = false;
 		}
+	}
+	if (result)printf("Results is same!! works well! \n");
+	else printf("results is not matched! \n");
+}
+
+// 데이터 초기화(스칼라 값) Default = 1
+void initDataScalar(float* ptr, unsigned int size, float tt = 1) {
+	while (size--) {
+		*ptr++ = tt;
 	}
 }
 
-void winogradConv2d(vector<float> &convOutput, vector<float> &convInput, vector<float> kernel, int input_n, int input_c, int input_h, int input_w, int output_c, int leftPadingSize, int rightPadingSize, int topPadingSize, int bottomPadingSize) {
-
-	int input_h_z = input_h + topPadingSize + bottomPadingSize;
-	int input_w_z = input_w + leftPadingSize + rightPadingSize;
-
-	//1. zeropadding 수행
-	vector<float> convInputWithZP(input_n * input_c * input_h_z * input_w_z);
-	zeroPadding(convInputWithZP, convInput, input_n, input_c, input_h, input_w, leftPadingSize, rightPadingSize, topPadingSize, bottomPadingSize);
-	//cout << "zeropadding" << endl;
-	//valueCheck(convInputWithZP, input_n, input_c, input_h_z, input_w_z);
-
-	vector<float> U(output_c * input_c * 16);
-	//2. filterTransform 수행
-	filterTransform(U, kernel, output_c, input_c);
-
-	//3. input transform 및 element wise multiplication, output transform수행
-	int output_h_z = input_h_z - 2;
-	int output_w_z = input_w_z - 2;
-
-	int temp_o = output_c * output_h_z * output_w_z;
-	int temp_i = input_c * input_h_z * input_w_z;
-	int temp_u = input_c * 16;
-
-	if (input_w_z % 2 == 0 && input_h_z % 2 == 0) {
-		//cout << "가로 짝, 세로 짝" << endl;
-		for (int n = 0; n < input_n; n++)
-		{
-			int temp_i2 = n * temp_i;
-			int temp_o2 = n * temp_o;
-
-			for (int row = 0; row < output_h_z; row += 2)
-			{
-				int row_idx1 = row * input_w_z;
-				int row_idx2 = row_idx1 + input_w_z;
-				int row_idx3 = row_idx2 + input_w_z;
-				int row_idx4 = row_idx3 + input_w_z;
-
-				int row_idxo1 = row * output_w_z;
-				int row_idxo2 = row_idxo1 + output_w_z;
-
-				for (int col = 0; col < output_w_z; col += 2)
-				{
-					for (int outch = 0; outch < output_c; outch++)
-					{
-						int temp_u2 = outch * temp_u;
-						int ot_idx1 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo1;
-						int ot_idx3 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo2;
-
-						float y1 = 0;
-						float y2 = 0;
-						float y3 = 0;
-						float y4 = 0;
-
-						for (int inch = 0; inch < input_c; inch++)
-						{
-							int temp_ic = inch * input_h_z * input_w_z;
-							int u_idx = inch * 16 + temp_u2; // U idex
-
-							int t_idx1 = temp_ic + temp_i2 + row_idx1 + col;
-							int t_idx2 = temp_ic + temp_i2 + row_idx2 + col;
-							int t_idx3 = temp_ic + temp_i2 + row_idx3 + col;
-							int t_idx4 = temp_ic + temp_i2 + row_idx4 + col;
-
-							float* d1 = &convInputWithZP[t_idx1];
-							float* d2 = &convInputWithZP[t_idx1 + 1];
-							float* d3 = &convInputWithZP[t_idx1 + 2];
-							float* d4 = &convInputWithZP[t_idx1 + 3];
-
-							float* d5 = &convInputWithZP[t_idx2];
-							float* d6 = &convInputWithZP[t_idx2 + 1];
-							float* d7 = &convInputWithZP[t_idx2 + 2];
-							float* d8 = &convInputWithZP[t_idx2 + 3];
-
-							float* d9 = &convInputWithZP[t_idx3];
-							float* d10 = &convInputWithZP[t_idx3 + 1];
-							float* d11 = &convInputWithZP[t_idx3 + 2];
-							float* d12 = &convInputWithZP[t_idx3 + 3];
-
-							float* d13 = &convInputWithZP[t_idx4];
-							float* d14 = &convInputWithZP[t_idx4 + 1];
-							float* d15 = &convInputWithZP[t_idx4 + 2];
-							float* d16 = &convInputWithZP[t_idx4 + 3];
-
-							float dd1 = *d11 - (*d3);
-							float dd2 = *d2 - (*d10);
-							float dd3 = *d7 + (*d11);
-							float dd4 = *d6 + (*d10);
-							float dd5 = *d7 - (*d11);
-							float dd6 = *d10 - (*d6);
-							float dd7 = *d15 - (*d7);
-							float dd8 = *d6 - (*d14);
-
-							float v1 = *d1 - *d9 + dd1;
-							float v2 = dd2 - dd1;//
-							float v3 = -dd1 - dd2;//
-							float v4 = dd2 - *d4 + *d12;
-
-							float v5 = *d5 + *d9 - dd3;
-							float v6 = dd4 + dd3;
-							float v7 = dd3 - dd4;
-							float v8 = dd4 - *d8 - *d12;
-
-							float v9 = *d9 - *d5 + dd5;
-							float v10 = dd6 - dd5;
-							float v11 = -(dd6 + dd5);
-							float v12 = dd6 + *d8 - *d12;
-
-							float v13 = *d5 - *d13 + dd7;
-							float v14 = dd8 - dd7;
-							float v15 = -dd7 - dd8;
-							float v16 = dd8 - *d8 + *d16;
-
-							// U . V
-							float m1 = v1 * U[u_idx];
-							float m2 = v2 * U[u_idx + 1];
-							float m3 = v3 * U[u_idx + 2];
-							float m4 = v4 * U[u_idx + 3];
-							float m5 = v5 * U[u_idx + 4];
-							float m6 = v6 * U[u_idx + 5];
-							float m7 = v7 * U[u_idx + 6];
-							float m8 = v8 * U[u_idx + 7];
-							float m9 = v9 * U[u_idx + 8];
-							float m10 = v10 * U[u_idx + 9];
-							float m11 = v11 * U[u_idx + 10];
-							float m12 = v12 * U[u_idx + 11];
-							float m13 = v13 * U[u_idx + 12];
-							float m14 = v14 * U[u_idx + 13];
-							float m15 = v15 * U[u_idx + 14];
-							float m16 = v16 * U[u_idx + 15];
-
-							// output transfom
-							float sub_y1 = m2 + m6 + m10;
-							float sub_y2 = m3 + m7 + m11;
-							float sub_y3 = m6 - m10 - m14;
-							float sub_y4 = m7 - m11 - m15;
-
-							y1 += m1 + m5 + m9 + sub_y1 + sub_y2;
-							y2 += sub_y1 - sub_y2 - m4 - m8 - m12;
-							y3 += m5 - m9 - m13 + sub_y3 + sub_y4;
-							y4 += sub_y3 - sub_y4 - m8 + m12 + m16;
-						}
-
-						convOutput[ot_idx1] = y1;
-						convOutput[ot_idx1 + 1] = y2;
-						convOutput[ot_idx3] = y3;
-						convOutput[ot_idx3 + 1] = y4;
-					}
-				}
-			}
-		}
-
+// 데이터 초기화(1부터 1씩 증가)
+void initDataStep(float* ptr, unsigned int size) {
+	float tt = 1;
+	while (size--) {
+		*ptr++ = tt++;
 	}
-	else if (input_w_z % 2 == 1 && input_h_z % 2 == 0) {
-		//cout << "가로 홀, 세로 짝" << endl;
-
-		for (int n = 0; n < input_n; n++)
-		{
-			int temp_i2 = n * temp_i;
-			int temp_o2 = n * temp_o;
-
-			for (int row = 0; row < output_h_z; row += 2)
-			{
-				int row_idx1 = row * input_w_z;
-				int row_idx2 = row_idx1 + input_w_z;
-				int row_idx3 = row_idx2 + input_w_z;
-				int row_idx4 = row_idx3 + input_w_z;
-
-				int row_idxo1 = row * output_w_z;
-				int row_idxo2 = row_idxo1 + output_w_z;
-
-				int col;
-				for (col = 0; col < output_w_z - 1; col += 2)
-				{
-					for (int outch = 0; outch < output_c; outch++)
-					{
-						int temp_u2 = outch * temp_u;
-						int ot_idx1 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo1;
-						int ot_idx3 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo2;
-
-						float y1 = 0;
-						float y2 = 0;
-						float y3 = 0;
-						float y4 = 0;
-
-						for (int inch = 0; inch < input_c; inch++)
-						{
-							int temp_ic = inch * input_h_z * input_w_z;
-							int u_idx = inch * 16 + temp_u2; // U idex
-
-							int t_idx1 = temp_ic + temp_i2 + row_idx1 + col;
-							int t_idx2 = temp_ic + temp_i2 + row_idx2 + col;
-							int t_idx3 = temp_ic + temp_i2 + row_idx3 + col;
-							int t_idx4 = temp_ic + temp_i2 + row_idx4 + col;
-
-							float* d1 = &convInputWithZP[t_idx1];
-							float* d2 = &convInputWithZP[t_idx1 + 1];
-							float* d3 = &convInputWithZP[t_idx1 + 2];
-							float* d4 = &convInputWithZP[t_idx1 + 3];
-
-							float* d5 = &convInputWithZP[t_idx2];
-							float* d6 = &convInputWithZP[t_idx2 + 1];
-							float* d7 = &convInputWithZP[t_idx2 + 2];
-							float* d8 = &convInputWithZP[t_idx2 + 3];
-
-							float* d9 = &convInputWithZP[t_idx3];
-							float* d10 = &convInputWithZP[t_idx3 + 1];
-							float* d11 = &convInputWithZP[t_idx3 + 2];
-							float* d12 = &convInputWithZP[t_idx3 + 3];
-
-							float* d13 = &convInputWithZP[t_idx4];
-							float* d14 = &convInputWithZP[t_idx4 + 1];
-							float* d15 = &convInputWithZP[t_idx4 + 2];
-							float* d16 = &convInputWithZP[t_idx4 + 3];
-
-							float dd1 = *d11 - (*d3);
-							float dd2 = *d2 - (*d10);
-							float dd3 = *d7 + (*d11);
-							float dd4 = *d6 + (*d10);
-							float dd5 = *d7 - (*d11);
-							float dd6 = *d10 - (*d6);
-							float dd7 = *d15 - (*d7);
-							float dd8 = *d6 - (*d14);
-
-							float v1 = *d1 - *d9 + dd1;
-							float v2 = dd2 - dd1;//
-							float v3 = -dd1 - dd2;//
-							float v4 = dd2 - *d4 + *d12;
-
-							float v5 = *d5 + *d9 - dd3;
-							float v6 = dd4 + dd3;
-							float v7 = dd3 - dd4;
-							float v8 = dd4 - *d8 - *d12;
-
-							float v9 = *d9 - *d5 + dd5;
-							float v10 = dd6 - dd5;
-							float v11 = -(dd6 + dd5);
-							float v12 = dd6 + *d8 - *d12;
-
-							float v13 = *d5 - *d13 + dd7;
-							float v14 = dd8 - dd7;
-							float v15 = -dd7 - dd8;
-							float v16 = dd8 - *d8 + *d16;
-
-							// U . V
-							float m1 = v1 * U[u_idx];
-							float m2 = v2 * U[u_idx + 1];
-							float m3 = v3 * U[u_idx + 2];
-							float m4 = v4 * U[u_idx + 3];
-							float m5 = v5 * U[u_idx + 4];
-							float m6 = v6 * U[u_idx + 5];
-							float m7 = v7 * U[u_idx + 6];
-							float m8 = v8 * U[u_idx + 7];
-							float m9 = v9 * U[u_idx + 8];
-							float m10 = v10 * U[u_idx + 9];
-							float m11 = v11 * U[u_idx + 10];
-							float m12 = v12 * U[u_idx + 11];
-							float m13 = v13 * U[u_idx + 12];
-							float m14 = v14 * U[u_idx + 13];
-							float m15 = v15 * U[u_idx + 14];
-							float m16 = v16 * U[u_idx + 15];
-
-							// output transfom
-							float sub_y1 = m2 + m6 + m10;
-							float sub_y2 = m3 + m7 + m11;
-							float sub_y3 = m6 - m10 - m14;
-							float sub_y4 = m7 - m11 - m15;
-
-							y1 += m1 + m5 + m9 + sub_y1 + sub_y2;
-							y2 += sub_y1 - sub_y2 - m4 - m8 - m12;
-							y3 += m5 - m9 - m13 + sub_y3 + sub_y4;
-							y4 += sub_y3 - sub_y4 - m8 + m12 + m16;
-						}
-
-						convOutput[ot_idx1] = y1;
-						convOutput[ot_idx1 + 1] = y2;
-						convOutput[ot_idx3] = y3;
-						convOutput[ot_idx3 + 1] = y4;
-					}
-				}
-
-				for (int outch = 0; outch < output_c; outch++)
-				{
-					int temp_u2 = outch * temp_u;
-					int ot_idx1 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo1;
-					int ot_idx3 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo2;
-
-					float y1 = 0;
-					float y3 = 0;
-
-					for (int inch = 0; inch < input_c; inch++)
-					{
-						int temp_ic = inch * input_h_z * input_w_z;
-						int u_idx = inch * 16 + temp_u2; // U idex
-
-						int t_idx1 = temp_ic + temp_i2 + row_idx1 + col;
-						int t_idx2 = temp_ic + temp_i2 + row_idx2 + col;
-						int t_idx3 = temp_ic + temp_i2 + row_idx3 + col;
-						int t_idx4 = temp_ic + temp_i2 + row_idx4 + col;
-
-						float* d1 = &convInputWithZP[t_idx1];
-						float* d2 = &convInputWithZP[t_idx1 + 1];
-						float* d3 = &convInputWithZP[t_idx1 + 2];
-
-						float* d5 = &convInputWithZP[t_idx2];
-						float* d6 = &convInputWithZP[t_idx2 + 1];
-						float* d7 = &convInputWithZP[t_idx2 + 2];
-
-						float* d9 = &convInputWithZP[t_idx3];
-						float* d10 = &convInputWithZP[t_idx3 + 1];
-						float* d11 = &convInputWithZP[t_idx3 + 2];
-
-						float* d13 = &convInputWithZP[t_idx4];
-						float* d14 = &convInputWithZP[t_idx4 + 1];
-						float* d15 = &convInputWithZP[t_idx4 + 2];
-
-						float dd1 = *d11 - (*d3);
-						float dd2 = *d2 - (*d10);
-						float dd3 = *d7 + (*d11);
-						float dd4 = *d6 + (*d10);
-						float dd5 = *d7 - (*d11);
-						float dd6 = *d10 - (*d6);
-						float dd7 = *d15 - (*d7);
-						float dd8 = *d6 - (*d14);
-
-						float v1 = *d1 - *d9 + dd1;
-						float v2 = dd2 - dd1;//
-						float v3 = -dd1 - dd2;//
-
-						float v5 = *d5 + *d9 - dd3;
-						float v6 = dd4 + dd3;
-						float v7 = dd3 - dd4;
-
-						float v9 = *d9 - *d5 + dd5;
-						float v10 = dd6 - dd5;
-						float v11 = -(dd6 + dd5);
-
-						float v13 = *d5 - *d13 + dd7;
-						float v14 = dd8 - dd7;
-						float v15 = -dd7 - dd8;
-
-						// U . V
-						float m1 = v1 * U[u_idx];
-						float m2 = v2 * U[u_idx + 1];
-						float m3 = v3 * U[u_idx + 2];
-						float m5 = v5 * U[u_idx + 4];
-						float m6 = v6 * U[u_idx + 5];
-						float m7 = v7 * U[u_idx + 6];
-						float m9 = v9 * U[u_idx + 8];
-						float m10 = v10 * U[u_idx + 9];
-						float m11 = v11 * U[u_idx + 10];
-						float m13 = v13 * U[u_idx + 12];
-						float m14 = v14 * U[u_idx + 13];
-						float m15 = v15 * U[u_idx + 14];
-
-						// output transfom
-						float sub_y1 = m2 + m6 + m10;
-						float sub_y2 = m3 + m7 + m11;
-						float sub_y3 = m6 - m10 - m14;
-						float sub_y4 = m7 - m11 - m15;
-
-						y1 += m1 + m5 + m9 + sub_y1 + sub_y2;
-						y3 += m5 - m9 - m13 + sub_y3 + sub_y4;
-					}
-					convOutput[ot_idx1] = y1;
-					convOutput[ot_idx3] = y3;
-				}
-			}
-		}
-	}
-	else if (input_w_z % 2 == 0 && input_h_z % 2 == 1) {
-
-		//cout << "가로 짝, 세로 홀" << endl;
-
-		for (int n = 0; n < input_n; n++)
-		{
-			int temp_i2 = n * temp_i;
-			int temp_o2 = n * temp_o;
-
-			int row;
-			for (row = 0; row < output_h_z - 1; row += 2)
-			{
-				int row_idx1 = row * input_w_z;
-				int row_idx2 = row_idx1 + input_w_z;
-				int row_idx3 = row_idx2 + input_w_z;
-				int row_idx4 = row_idx3 + input_w_z;
-
-				int row_idxo1 = row * output_w_z;
-				int row_idxo2 = row_idxo1 + output_w_z;
-
-				for (int col = 0; col < output_w_z; col += 2)
-				{
-					for (int outch = 0; outch < output_c; outch++)
-					{
-						int temp_u2 = outch * temp_u;
-						int ot_idx1 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo1;
-						int ot_idx3 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo2;
-
-						float y1 = 0;
-						float y2 = 0;
-						float y3 = 0;
-						float y4 = 0;
-
-						for (int inch = 0; inch < input_c; inch++)
-						{
-							int temp_ic = inch * input_h_z * input_w_z;
-							int u_idx = inch * 16 + temp_u2; // U idex
-
-							int t_idx1 = temp_ic + temp_i2 + row_idx1 + col;
-							int t_idx2 = temp_ic + temp_i2 + row_idx2 + col;
-							int t_idx3 = temp_ic + temp_i2 + row_idx3 + col;
-							int t_idx4 = temp_ic + temp_i2 + row_idx4 + col;
-
-							float* d1 = &convInputWithZP[t_idx1];
-							float* d2 = &convInputWithZP[t_idx1 + 1];
-							float* d3 = &convInputWithZP[t_idx1 + 2];
-							float* d4 = &convInputWithZP[t_idx1 + 3];
-
-							float* d5 = &convInputWithZP[t_idx2];
-							float* d6 = &convInputWithZP[t_idx2 + 1];
-							float* d7 = &convInputWithZP[t_idx2 + 2];
-							float* d8 = &convInputWithZP[t_idx2 + 3];
-
-							float* d9 = &convInputWithZP[t_idx3];
-							float* d10 = &convInputWithZP[t_idx3 + 1];
-							float* d11 = &convInputWithZP[t_idx3 + 2];
-							float* d12 = &convInputWithZP[t_idx3 + 3];
-
-							float* d13 = &convInputWithZP[t_idx4];
-							float* d14 = &convInputWithZP[t_idx4 + 1];
-							float* d15 = &convInputWithZP[t_idx4 + 2];
-							float* d16 = &convInputWithZP[t_idx4 + 3];
-
-							float dd1 = *d11 - (*d3);
-							float dd2 = *d2 - (*d10);
-							float dd3 = *d7 + (*d11);
-							float dd4 = *d6 + (*d10);
-							float dd5 = *d7 - (*d11);
-							float dd6 = *d10 - (*d6);
-							float dd7 = *d15 - (*d7);
-							float dd8 = *d6 - (*d14);
-
-							float v1 = *d1 - *d9 + dd1;
-							float v2 = dd2 - dd1;//
-							float v3 = -dd1 - dd2;//
-							float v4 = dd2 - *d4 + *d12;
-
-							float v5 = *d5 + *d9 - dd3;
-							float v6 = dd4 + dd3;
-							float v7 = dd3 - dd4;
-							float v8 = dd4 - *d8 - *d12;
-
-							float v9 = *d9 - *d5 + dd5;
-							float v10 = dd6 - dd5;
-							float v11 = -(dd6 + dd5);
-							float v12 = dd6 + *d8 - *d12;
-
-							float v13 = *d5 - *d13 + dd7;
-							float v14 = dd8 - dd7;
-							float v15 = -dd7 - dd8;
-							float v16 = dd8 - *d8 + *d16;
-
-							// U . V
-							float m1 = v1 * U[u_idx];
-							float m2 = v2 * U[u_idx + 1];
-							float m3 = v3 * U[u_idx + 2];
-							float m4 = v4 * U[u_idx + 3];
-							float m5 = v5 * U[u_idx + 4];
-							float m6 = v6 * U[u_idx + 5];
-							float m7 = v7 * U[u_idx + 6];
-							float m8 = v8 * U[u_idx + 7];
-							float m9 = v9 * U[u_idx + 8];
-							float m10 = v10 * U[u_idx + 9];
-							float m11 = v11 * U[u_idx + 10];
-							float m12 = v12 * U[u_idx + 11];
-							float m13 = v13 * U[u_idx + 12];
-							float m14 = v14 * U[u_idx + 13];
-							float m15 = v15 * U[u_idx + 14];
-							float m16 = v16 * U[u_idx + 15];
-
-							// output transfom
-							float sub_y1 = m2 + m6 + m10;
-							float sub_y2 = m3 + m7 + m11;
-							float sub_y3 = m6 - m10 - m14;
-							float sub_y4 = m7 - m11 - m15;
-
-							y1 += m1 + m5 + m9 + sub_y1 + sub_y2;
-							y2 += sub_y1 - sub_y2 - m4 - m8 - m12;
-							y3 += m5 - m9 - m13 + sub_y3 + sub_y4;
-							y4 += sub_y3 - sub_y4 - m8 + m12 + m16;
-						}
-
-						convOutput[ot_idx1] = y1;
-						convOutput[ot_idx1 + 1] = y2;
-						convOutput[ot_idx3] = y3;
-						convOutput[ot_idx3 + 1] = y4;
-					}
-				}
-			}
-
-			int row_idx1 = row * input_w_z;
-			int row_idx2 = row_idx1 + input_w_z;
-			int row_idx3 = row_idx2 + input_w_z;
-			int row_idx4 = row_idx3 + input_w_z;
-
-			int row_idxo1 = row * output_w_z;
-			int row_idxo2 = row_idxo1 + output_w_z;
-
-			for (int col = 0; col < output_w_z; col += 2)
-			{
-				for (int outch = 0; outch < output_c; outch++)
-				{
-					int temp_u2 = outch * temp_u;
-					int ot_idx1 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo1;
-					int ot_idx3 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo2;
-
-					float y1 = 0;
-					float y2 = 0;
-
-					for (int inch = 0; inch < input_c; inch++)
-					{
-						int temp_ic = inch * input_h_z * input_w_z;
-						int u_idx = inch * 16 + temp_u2; // U idex
-
-						int t_idx1 = temp_ic + temp_i2 + row_idx1 + col;
-						int t_idx2 = temp_ic + temp_i2 + row_idx2 + col;
-						int t_idx3 = temp_ic + temp_i2 + row_idx3 + col;
-						int t_idx4 = temp_ic + temp_i2 + row_idx4 + col;
-
-						float* d1 = &convInputWithZP[t_idx1];
-						float* d2 = &convInputWithZP[t_idx1 + 1];
-						float* d3 = &convInputWithZP[t_idx1 + 2];
-						float* d4 = &convInputWithZP[t_idx1 + 3];
-
-						float* d5 = &convInputWithZP[t_idx2];
-						float* d6 = &convInputWithZP[t_idx2 + 1];
-						float* d7 = &convInputWithZP[t_idx2 + 2];
-						float* d8 = &convInputWithZP[t_idx2 + 3];
-
-						float* d9 = &convInputWithZP[t_idx3];
-						float* d10 = &convInputWithZP[t_idx3 + 1];
-						float* d11 = &convInputWithZP[t_idx3 + 2];
-						float* d12 = &convInputWithZP[t_idx3 + 3];
-
-						float dd1 = *d11 - (*d3);
-						float dd2 = *d2 - (*d10);
-						float dd3 = *d7 + (*d11);
-						float dd4 = *d6 + (*d10);
-						float dd5 = *d7 - (*d11);
-						float dd6 = *d10 - (*d6);
-
-						float v1 = *d1 - *d9 + dd1;
-						float v2 = dd2 - dd1;//
-						float v3 = -dd1 - dd2;//
-						float v4 = dd2 - *d4 + *d12;
-
-						float v5 = *d5 + *d9 - dd3;
-						float v6 = dd4 + dd3;
-						float v7 = dd3 - dd4;
-						float v8 = dd4 - *d8 - *d12;
-
-						float v9 = *d9 - *d5 + dd5;
-						float v10 = dd6 - dd5;
-						float v11 = -(dd6 + dd5);
-						float v12 = dd6 + *d8 - *d12;
-
-						// U . V
-						float m1 = v1 * U[u_idx];
-						float m2 = v2 * U[u_idx + 1];
-						float m3 = v3 * U[u_idx + 2];
-						float m4 = v4 * U[u_idx + 3];
-						float m5 = v5 * U[u_idx + 4];
-						float m6 = v6 * U[u_idx + 5];
-						float m7 = v7 * U[u_idx + 6];
-						float m8 = v8 * U[u_idx + 7];
-						float m9 = v9 * U[u_idx + 8];
-						float m10 = v10 * U[u_idx + 9];
-						float m11 = v11 * U[u_idx + 10];
-						float m12 = v12 * U[u_idx + 11];
-
-						// output transfom
-						float sub_y1 = m2 + m6 + m10;
-						float sub_y2 = m3 + m7 + m11;
-
-						y1 += m1 + m5 + m9 + sub_y1 + sub_y2;
-						y2 += sub_y1 - sub_y2 - m4 - m8 - m12;
-					}
-
-					convOutput[ot_idx1] = y1;
-					convOutput[ot_idx1 + 1] = y2;
-				}
-			}
-		}
-	}
-	else {
-		//cout << "가로 홀, 세로 홀" << endl;
-
-		for (int n = 0; n < input_n; n++)
-		{
-			int temp_i2 = n * temp_i;
-			int temp_o2 = n * temp_o;
-
-			int row;
-			for (row = 0; row < output_h_z - 1; row += 2)
-			{
-				int row_idx1 = row * input_w_z;
-				int row_idx2 = row_idx1 + input_w_z;
-				int row_idx3 = row_idx2 + input_w_z;
-				int row_idx4 = row_idx3 + input_w_z;
-
-				int row_idxo1 = row * output_w_z;
-				int row_idxo2 = row_idxo1 + output_w_z;
-
-				int col;
-				for (col = 0; col < output_w_z - 1; col += 2)
-				{
-
-					for (int outch = 0; outch < output_c; outch++)
-					{
-						int temp_u2 = outch * temp_u;
-						int ot_idx1 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo1;
-						int ot_idx3 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo2;
-
-						float y1 = 0;
-						float y2 = 0;
-						float y3 = 0;
-						float y4 = 0;
-
-						for (int inch = 0; inch < input_c; inch++)
-						{
-							int temp_ic = inch * input_h_z * input_w_z;
-							int u_idx = inch * 16 + temp_u2; // U idex
-
-							int t_idx1 = temp_ic + temp_i2 + row_idx1 + col;
-							int t_idx2 = temp_ic + temp_i2 + row_idx2 + col;
-							int t_idx3 = temp_ic + temp_i2 + row_idx3 + col;
-							int t_idx4 = temp_ic + temp_i2 + row_idx4 + col;
-
-							float* d1 = &convInputWithZP[t_idx1];
-							float* d2 = &convInputWithZP[t_idx1 + 1];
-							float* d3 = &convInputWithZP[t_idx1 + 2];
-							float* d4 = &convInputWithZP[t_idx1 + 3];
-
-							float* d5 = &convInputWithZP[t_idx2];
-							float* d6 = &convInputWithZP[t_idx2 + 1];
-							float* d7 = &convInputWithZP[t_idx2 + 2];
-							float* d8 = &convInputWithZP[t_idx2 + 3];
-
-							float* d9 = &convInputWithZP[t_idx3];
-							float* d10 = &convInputWithZP[t_idx3 + 1];
-							float* d11 = &convInputWithZP[t_idx3 + 2];
-							float* d12 = &convInputWithZP[t_idx3 + 3];
-
-							float* d13 = &convInputWithZP[t_idx4];
-							float* d14 = &convInputWithZP[t_idx4 + 1];
-							float* d15 = &convInputWithZP[t_idx4 + 2];
-							float* d16 = &convInputWithZP[t_idx4 + 3];
-
-							float dd1 = *d11 - (*d3);
-							float dd2 = *d2 - (*d10);
-							float dd3 = *d7 + (*d11);
-							float dd4 = *d6 + (*d10);
-							float dd5 = *d7 - (*d11);
-							float dd6 = *d10 - (*d6);
-							float dd7 = *d15 - (*d7);
-							float dd8 = *d6 - (*d14);
-
-							float v1 = *d1 - *d9 + dd1;
-							float v2 = dd2 - dd1;//
-							float v3 = -dd1 - dd2;//
-							float v4 = dd2 - *d4 + *d12;
-
-							float v5 = *d5 + *d9 - dd3;
-							float v6 = dd4 + dd3;
-							float v7 = dd3 - dd4;
-							float v8 = dd4 - *d8 - *d12;
-
-							float v9 = *d9 - *d5 + dd5;
-							float v10 = dd6 - dd5;
-							float v11 = -(dd6 + dd5);
-							float v12 = dd6 + *d8 - *d12;
-
-							float v13 = *d5 - *d13 + dd7;
-							float v14 = dd8 - dd7;
-							float v15 = -dd7 - dd8;
-							float v16 = dd8 - *d8 + *d16;
-
-							// U . V
-							float m1 = v1 * U[u_idx];
-							float m2 = v2 * U[u_idx + 1];
-							float m3 = v3 * U[u_idx + 2];
-							float m4 = v4 * U[u_idx + 3];
-							float m5 = v5 * U[u_idx + 4];
-							float m6 = v6 * U[u_idx + 5];
-							float m7 = v7 * U[u_idx + 6];
-							float m8 = v8 * U[u_idx + 7];
-							float m9 = v9 * U[u_idx + 8];
-							float m10 = v10 * U[u_idx + 9];
-							float m11 = v11 * U[u_idx + 10];
-							float m12 = v12 * U[u_idx + 11];
-							float m13 = v13 * U[u_idx + 12];
-							float m14 = v14 * U[u_idx + 13];
-							float m15 = v15 * U[u_idx + 14];
-							float m16 = v16 * U[u_idx + 15];
-
-							// output transfom
-							float sub_y1 = m2 + m6 + m10;
-							float sub_y2 = m3 + m7 + m11;
-							float sub_y3 = m6 - m10 - m14;
-							float sub_y4 = m7 - m11 - m15;
-
-							y1 += m1 + m5 + m9 + sub_y1 + sub_y2;
-							y2 += sub_y1 - sub_y2 - m4 - m8 - m12;
-							y3 += m5 - m9 - m13 + sub_y3 + sub_y4;
-							y4 += sub_y3 - sub_y4 - m8 + m12 + m16;
-						}
-
-						convOutput[ot_idx1] = y1;
-						convOutput[ot_idx1 + 1] = y2;
-						convOutput[ot_idx3] = y3;
-						convOutput[ot_idx3 + 1] = y4;
-					}
-				}
-
-				for (int outch = 0; outch < output_c; outch++)
-				{
-					int temp_u2 = outch * temp_u;
-					int ot_idx1 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo1;
-					int ot_idx3 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo2;
-
-					float y1 = 0;
-					float y3 = 0;
-
-					for (int inch = 0; inch < input_c; inch++)
-					{
-						int temp_ic = inch * input_h_z * input_w_z;
-						int u_idx = inch * 16 + temp_u2; // U idex
-
-						int t_idx1 = temp_ic + temp_i2 + row_idx1 + col;
-						int t_idx2 = temp_ic + temp_i2 + row_idx2 + col;
-						int t_idx3 = temp_ic + temp_i2 + row_idx3 + col;
-						int t_idx4 = temp_ic + temp_i2 + row_idx4 + col;
-
-						float* d1 = &convInputWithZP[t_idx1];
-						float* d2 = &convInputWithZP[t_idx1 + 1];
-						float* d3 = &convInputWithZP[t_idx1 + 2];
-
-						float* d5 = &convInputWithZP[t_idx2];
-						float* d6 = &convInputWithZP[t_idx2 + 1];
-						float* d7 = &convInputWithZP[t_idx2 + 2];
-
-						float* d9 = &convInputWithZP[t_idx3];
-						float* d10 = &convInputWithZP[t_idx3 + 1];
-						float* d11 = &convInputWithZP[t_idx3 + 2];
-
-						float* d13 = &convInputWithZP[t_idx4];
-						float* d14 = &convInputWithZP[t_idx4 + 1];
-						float* d15 = &convInputWithZP[t_idx4 + 2];
-
-						float dd1 = *d11 - (*d3);
-						float dd2 = *d2 - (*d10);
-						float dd3 = *d7 + (*d11);
-						float dd4 = *d6 + (*d10);
-						float dd5 = *d7 - (*d11);
-						float dd6 = *d10 - (*d6);
-						float dd7 = *d15 - (*d7);
-						float dd8 = *d6 - (*d14);
-
-						float v1 = *d1 - *d9 + dd1;
-						float v2 = dd2 - dd1;//
-						float v3 = -dd1 - dd2;//
-
-						float v5 = *d5 + *d9 - dd3;
-						float v6 = dd4 + dd3;
-						float v7 = dd3 - dd4;
-
-						float v9 = *d9 - *d5 + dd5;
-						float v10 = dd6 - dd5;
-						float v11 = -(dd6 + dd5);
-
-						float v13 = *d5 - *d13 + dd7;
-						float v14 = dd8 - dd7;
-						float v15 = -dd7 - dd8;
-
-						// U . V
-						float m1 = v1 * U[u_idx];
-						float m2 = v2 * U[u_idx + 1];
-						float m3 = v3 * U[u_idx + 2];
-						float m5 = v5 * U[u_idx + 4];
-						float m6 = v6 * U[u_idx + 5];
-						float m7 = v7 * U[u_idx + 6];
-						float m9 = v9 * U[u_idx + 8];
-						float m10 = v10 * U[u_idx + 9];
-						float m11 = v11 * U[u_idx + 10];
-						float m13 = v13 * U[u_idx + 12];
-						float m14 = v14 * U[u_idx + 13];
-						float m15 = v15 * U[u_idx + 14];
-
-						// output transfom
-						float sub_y1 = m2 + m6 + m10;
-						float sub_y2 = m3 + m7 + m11;
-						float sub_y3 = m6 - m10 - m14;
-						float sub_y4 = m7 - m11 - m15;
-
-						y1 += m1 + m5 + m9 + sub_y1 + sub_y2;
-						y3 += m5 - m9 - m13 + sub_y3 + sub_y4;
-					}
-					convOutput[ot_idx1] = y1;
-					convOutput[ot_idx3] = y3;
-				}
-			}
-
-			int row_idx1 = row * input_w_z;
-			int row_idx2 = row_idx1 + input_w_z;
-			int row_idx3 = row_idx2 + input_w_z;
-			int row_idx4 = row_idx3 + input_w_z;
-
-			int row_idxo1 = row * output_w_z;
-			int row_idxo2 = row_idxo1 + output_w_z;
-
-			int col;
-			for (col = 0; col < output_w_z - 1; col += 2)
-			{
-				for (int outch = 0; outch < output_c; outch++)
-				{
-					int temp_u2 = outch * temp_u;
-					int ot_idx1 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo1;
-					int ot_idx3 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo2;
-
-					float y1 = 0;
-					float y2 = 0;
-
-					for (int inch = 0; inch < input_c; inch++)
-					{
-						int temp_ic = inch * input_h_z * input_w_z;
-						int u_idx = inch * 16 + temp_u2; // U idex
-
-						int t_idx1 = temp_ic + temp_i2 + row_idx1 + col;
-						int t_idx2 = temp_ic + temp_i2 + row_idx2 + col;
-						int t_idx3 = temp_ic + temp_i2 + row_idx3 + col;
-						int t_idx4 = temp_ic + temp_i2 + row_idx4 + col;
-
-						float* d1 = &convInputWithZP[t_idx1];
-						float* d2 = &convInputWithZP[t_idx1 + 1];
-						float* d3 = &convInputWithZP[t_idx1 + 2];
-						float* d4 = &convInputWithZP[t_idx1 + 3];
-
-						float* d5 = &convInputWithZP[t_idx2];
-						float* d6 = &convInputWithZP[t_idx2 + 1];
-						float* d7 = &convInputWithZP[t_idx2 + 2];
-						float* d8 = &convInputWithZP[t_idx2 + 3];
-
-						float* d9 = &convInputWithZP[t_idx3];
-						float* d10 = &convInputWithZP[t_idx3 + 1];
-						float* d11 = &convInputWithZP[t_idx3 + 2];
-						float* d12 = &convInputWithZP[t_idx3 + 3];
-
-						float dd1 = *d11 - (*d3);
-						float dd2 = *d2 - (*d10);
-						float dd3 = *d7 + (*d11);
-						float dd4 = *d6 + (*d10);
-						float dd5 = *d7 - (*d11);
-						float dd6 = *d10 - (*d6);
-
-						float v1 = *d1 - *d9 + dd1;
-						float v2 = dd2 - dd1;//
-						float v3 = -dd1 - dd2;//
-						float v4 = dd2 - *d4 + *d12;
-
-						float v5 = *d5 + *d9 - dd3;
-						float v6 = dd4 + dd3;
-						float v7 = dd3 - dd4;
-						float v8 = dd4 - *d8 - *d12;
-
-						float v9 = *d9 - *d5 + dd5;
-						float v10 = dd6 - dd5;
-						float v11 = -(dd6 + dd5);
-						float v12 = dd6 + *d8 - *d12;
-
-						// U . V
-						float m1 = v1 * U[u_idx];
-						float m2 = v2 * U[u_idx + 1];
-						float m3 = v3 * U[u_idx + 2];
-						float m4 = v4 * U[u_idx + 3];
-						float m5 = v5 * U[u_idx + 4];
-						float m6 = v6 * U[u_idx + 5];
-						float m7 = v7 * U[u_idx + 6];
-						float m8 = v8 * U[u_idx + 7];
-						float m9 = v9 * U[u_idx + 8];
-						float m10 = v10 * U[u_idx + 9];
-						float m11 = v11 * U[u_idx + 10];
-						float m12 = v12 * U[u_idx + 11];
-
-						// output transfom
-						float sub_y1 = m2 + m6 + m10;
-						float sub_y2 = m3 + m7 + m11;
-
-						y1 += m1 + m5 + m9 + sub_y1 + sub_y2;
-						y2 += sub_y1 - sub_y2 - m4 - m8 - m12;
-					}
-
-					convOutput[ot_idx1] = y1;
-					convOutput[ot_idx1 + 1] = y2;
-				}
-			}
-
-			for (int outch = 0; outch < output_c; outch++)
-			{
-				int temp_u2 = outch * temp_u;
-				int ot_idx1 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo1;
-				int ot_idx3 = outch * output_h_z * output_w_z + temp_o2 + col + row_idxo2;
-
-				float y1 = 0;
-
-				for (int inch = 0; inch < input_c; inch++)
-				{
-					int temp_ic = inch * input_h_z * input_w_z;
-					int u_idx = inch * 16 + temp_u2; // U idex
-
-					int t_idx1 = temp_ic + temp_i2 + row_idx1 + col;
-					int t_idx2 = temp_ic + temp_i2 + row_idx2 + col;
-					int t_idx3 = temp_ic + temp_i2 + row_idx3 + col;
-
-					float* d1 = &convInputWithZP[t_idx1];
-					float* d2 = &convInputWithZP[t_idx1 + 1];
-					float* d3 = &convInputWithZP[t_idx1 + 2];
-
-					float* d5 = &convInputWithZP[t_idx2];
-					float* d6 = &convInputWithZP[t_idx2 + 1];
-					float* d7 = &convInputWithZP[t_idx2 + 2];
-
-					float* d9 = &convInputWithZP[t_idx3];
-					float* d10 = &convInputWithZP[t_idx3 + 1];
-					float* d11 = &convInputWithZP[t_idx3 + 2];
-
-					float dd1 = *d11 - (*d3);
-					float dd2 = *d2 - (*d10);
-					float dd3 = *d7 + (*d11);
-					float dd4 = *d6 + (*d10);
-					float dd5 = *d7 - (*d11);
-					float dd6 = *d10 - (*d6);
-
-					float v1 = *d1 - *d9 + dd1;
-					float v2 = dd2 - dd1;//
-					float v3 = -dd1 - dd2;//
-
-					float v5 = *d5 + *d9 - dd3;
-					float v6 = dd4 + dd3;
-					float v7 = dd3 - dd4;
-
-					float v9 = *d9 - *d5 + dd5;
-					float v10 = dd6 - dd5;
-					float v11 = -(dd6 + dd5);
-
-					// U . V
-					float m1 = v1 * U[u_idx];
-					float m2 = v2 * U[u_idx + 1];
-					float m3 = v3 * U[u_idx + 2];
-					float m5 = v5 * U[u_idx + 4];
-					float m6 = v6 * U[u_idx + 5];
-					float m7 = v7 * U[u_idx + 6];
-					float m9 = v9 * U[u_idx + 8];
-					float m10 = v10 * U[u_idx + 9];
-					float m11 = v11 * U[u_idx + 10];
-
-					// output transfom
-					float sub_y1 = m2 + m6 + m10;
-					float sub_y2 = m3 + m7 + m11;
-
-					y1 += m1 + m5 + m9 + sub_y1 + sub_y2;
-				}
-				convOutput[ot_idx1] = y1;
-			}
-		}
+}
+
+// 데이터 초기화(랜덤 값)
+void initDataRandom(float* ptr, unsigned int size) {
+	while (size--) {
+		*ptr++ = rand() % 10;
 	}
 }
 
 int main()
 {
-	cout << "Winograd Convolutions function! \n\n";
+	cout << "Winograd & Naive Convolutions function! \n\n";
+	// *** notice *** 
+	// In case of winograd, Only use stride = 1, kernel = 3 and even number input size.
 
-	int batchSize = 1;
-	int input_n = batchSize;
-	int input_c = 1;
-	int input_h = 32;
-	int input_w = 32;
-
-	// input[input_n][input_c][input_h][input_w] 
-	// 임시 input 값 생성 1++
-	vector<float> input(input_n * input_c * input_h * input_w);
-	float count = 1.f;
-	int temp1 = input_c * input_h * input_w;
-	for (int ⁠n_idx = 0; ⁠n_idx < input_n; ⁠n_idx++)
-	{
-		int temp2 = ⁠n_idx * temp1;
-		for (int ⁠c_idx = 0; ⁠c_idx < input_c; ⁠c_idx++)
-		{
-			int temp3 = ⁠c_idx * input_h * input_w + temp2;
-			for (int ⁠h_idx = 0; ⁠h_idx < input_h; ⁠h_idx++)
-			{
-				int temp4 = ⁠h_idx * input_w + temp3;
-				for (int w_idx = 0; w_idx < input_w; w_idx++)
-				{
-					int g_idx = w_idx + temp4;
-					input[g_idx] = count;
-					count++;
-				}
-			}
-		}
-	}
-
-	int output_c = 3;
-	// h[output_c][input_c][KernelSize_h][KernelSize_w] 
-	// h[4][3][3][3]
-	// 임시 filter 값 생성 1
-	vector<float> h(output_c * input_c * 3 * 3);
-	//float count = 1.f;
-	int temp1h = input_c * 3 * 3;
-	for (int ⁠n_idx = 0; ⁠n_idx < output_c; ⁠n_idx++)
-	{
-		int temp2h = ⁠n_idx * temp1h;
-		for (int ⁠c_idx = 0; ⁠c_idx < input_c; ⁠c_idx++)
-		{
-			int temp3h = ⁠c_idx * 3 * 3 + temp2h;
-			for (int ⁠h_idx = 0; ⁠h_idx < 3; ⁠h_idx++)
-			{
-				int temp4h = ⁠h_idx * 3 + temp3h;
-				for (int w_idx = 0; w_idx < 3; w_idx++)
-				{
-					int g_idxh = w_idx + temp4h;
-					h[g_idxh] = 1.f;
-					//h[g_idx] = count;
-					//count++;
-				}
-			}
-		}
-	}
-
-	// h(filater) 값 체크
-	valueCheck(h, output_c, input_c, 3, 3);
-	// input 값 체크
-	valueCheck(input, input_n, input_c, input_h, input_w);
-
-	int leftPadingSize = 1;
-	int rightPadingSize = 0;
-	int topPadingSize = 1;
-	int bottomPadingSize = 1;
-
-	int output_h = (input_h + topPadingSize + bottomPadingSize) - 2;
-	int output_w = (input_w + leftPadingSize + rightPadingSize) - 2;
-	// output[input_n][output_c][output_h][output_w] 
-	vector<float> output(input_n * output_c * output_h * output_w);
-
-	long long start_usec = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
-
-	winogradConv2d(output, input, h, input_n, input_c, input_h, input_w, output_c, leftPadingSize, rightPadingSize, topPadingSize, bottomPadingSize);
-
-	long long end_usec = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
-	int frame_sec = int(end_usec - start_usec);
-
-	// output 값 체크
-	cout << "===== Winograd Convolution ===== \n";
-	valueCheck(output, input_n, output_c, output_h, output_w);
-
-
-
-	cout << "===== Convolution ===== \n";
-
-	int zeroPaddingOutputSize = input_n * input_c * (input_h + topPadingSize + bottomPadingSize)*(input_w + leftPadingSize + rightPadingSize);
-
-	int outputCh = output_c;
-	int kernelSize = 3;
+	// 0) parameter setting
+	int input_n = 1;
+	int input_c = 3;
+	int input_h = 512;
+	int input_w = 512;
 	int stride = 1;
-	int outputHeight = ((input_h + topPadingSize + bottomPadingSize - kernelSize) / stride) + 1;
-	int outputWidth = ((input_w + leftPadingSize + rightPadingSize - kernelSize) / stride) + 1;
-	int convOutputSize = input_n * outputCh * outputHeight * outputWidth;
+	int kernel_size = 3;
+	int output_c = 1;
+	int pad_l = 0;
+	int pad_r = 0;
+	int pad_t = 0;
+	int pad_b = 0;
+	int output_p = ((input_h + pad_t + pad_b - kernel_size) / stride) + 1;
+	int output_q = ((input_w + pad_l + pad_r - kernel_size) / stride) + 1;
 
-	vector<float> inputVecWithZeroPadding(zeroPaddingOutputSize);
-	vector<float> conv1Output(convOutputSize);
 
+	// 1) generation input data
+	// input[input_n][input_c][input_h][input_w] 
+	vector<float> input(input_n * input_c * input_h * input_w);
+	initDataRandom(input.data(), input.size());
+	// input value check
+	//valueCheck(input, input_n, input_c, input_h, input_w);
+
+
+	// 2) generation filter value
+	// h[output_c][input_c][kernel_size][kernel_size] 
+	vector<float> h(output_c * input_c * kernel_size * kernel_size);
+	initDataRandom(h.data(), h.size());
+	// h(filter) value check
+	//valueCheck(h, output_c, input_c, 3, 3);
+
+
+	// 3) assignment output space 
+	// output[input_n][output_c][output_p][output_q] 
+	vector<float> wino_output(input_n * output_c * output_p * output_q);
+	vector<float> naive_output(input_n * output_c * output_p * output_q);
+
+	vector<float> input_padded(input_n * input_c * (input_h + pad_t + pad_b) * (input_w + pad_l + pad_r));
+	zeroPadding(input_padded, input, input_n, input_c, input_h, input_w, pad_t, pad_b, pad_l, pad_r);
+
+	// 4) execute winograd convolution
+	cout << "===== Winograd Convolution ===== \n";
+	long long start_usec = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
+	winogradConv2d(wino_output, input_padded, h, input_n, input_c, input_h + pad_t + pad_b, input_w + pad_l + pad_r, output_c);
+	long long end_usec = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
+	// Winograd output value check
+	//valueCheck(wino_output, input_n, output_c, output_p, output_q);
+
+
+	// 5) execute naive convolution
+	cout << "===== Naive Convolution ===== \n";
 	long long start_usec2 = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
 
-	zeroPadding(inputVecWithZeroPadding, input, input_n, input_c, input_h, input_w, topPadingSize, bottomPadingSize, leftPadingSize, rightPadingSize);
-	//valueCheck(inputVecWithZeroPadding, input_n, input_c, input_h + topPadingSize + bottomPadingSize, input_w + leftPadingSize + rightPadingSize);
-	convolution(conv1Output, inputVecWithZeroPadding, h, kernelSize, stride, input_n, input_c, input_h + topPadingSize + bottomPadingSize, input_w + leftPadingSize + rightPadingSize, outputCh);
-	//valueCheck(conv1Output, input_n, outputCh, outputHeight, outputWidth);
-	
+	//valueCheck(inputPadding, input_n, input_c, input_h + pad_t + pad_b, input_w + pad_l + pad_r);
+	convolution(naive_output.data(), input_padded.data(), h.data(), input_n, input_c, input_h + pad_t + pad_b, input_w + pad_l + pad_r, output_c, kernel_size, kernel_size, stride, stride);
 	long long end_usec2 = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
-	int frame_sec2 = int(end_usec2 - start_usec2);
+	// Naive output value check
+	//valueCheck(naive_output, input_n, output_c, output_p, output_q);
 
 
-	cout << frame_sec2 << "u sec (Convolution)" << endl;
+	// 6) print results
+	compareResults(naive_output.data(), wino_output.data(), wino_output.size());
+	printf("input[%4d,%4d,%4d,%4d] kernel[%4d,%4d,%4d,%4d] output[%4d,%4d,%4d,%4d]\n\n", 
+		input_n, input_c, input_h, input_w, output_c, input_c, kernel_size, kernel_size, input_n, output_c, output_p, output_q);
+	printf("dur_time(Naive Convolution)     = %6.5f [msec] \n", (end_usec2 - start_usec2) / 1000.f);
+	printf("dur_time(Winograd Convolution)  = %6.5f [msec] \n", (end_usec - start_usec) / 1000.f);
 
-	cout << frame_sec << "u sec (Winograd Convolution)" << endl;
 
 	return 0;
 }
+
+//input[1, 3, 512, 512] kernel[1, 3, 3, 3] output[1, 1, 510, 510]
+//dur_time(Naive Convolution) = 6.07500[msec]
+//dur_time(Winograd Convolution) = 1.93700[msec]
+
+//input[   1,   3,1024,1024] kernel[   1,   3,   3,   3] output[   1,   1,1022,1022]
+//dur_time(Naive Convolution) = 26.18000[msec]
+//dur_time(Winograd Convolution) = 7.77900[msec]
+
+//input[1, 3, 2048, 2048] kernel[1, 3, 3, 3] output[1, 1, 2046, 2046]
+//dur_time(Naive Convolution) = 84.76600[msec]
+//dur_time(Winograd Convolution) = 29.81900[msec]
+
+//input[1, 3, 4096, 4096] kernel[1, 3, 3, 3] output[1, 1, 4094, 4094]
+//dur_time(Naive Convolution) = 341.64801[msec]
+//dur_time(Winograd Convolution) = 113.30500[msec]
